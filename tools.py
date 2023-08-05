@@ -64,7 +64,7 @@ def cone_by_spherical(
     z: TensorType,
     theta: TensorType,
     phi: TensorType,
-    r: float = 1,
+    r: float = 1.0,
 ) -> go.Cone:
     """return a plotly cone object by the spherical coordinates, which is a tensor of shape (N, 5) with
     the first three columns as the x, y, z coordinates, and the last two columns as the theta, phi angles.
