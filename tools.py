@@ -1,182 +1,177 @@
+import timeit
+import os
+
 import torch
-import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
 import plotly.graph_objects as go
 import plotly.express as px
 import plotly.figure_factory as ff
+
 import pandas as pd
-import timeit
 import numpy as np
-from typing import Tuple, Callable
 
-BoxDimType = Tuple[float, float]
+
+from typing import Tuple, Callable, Union, List, Optional
+
+Opt = Optional
+NumType = Union[int, float]
 TensorType = torch.Tensor
+BoxDimType = Tuple[NumType, NumType]
+IndScalarType = Union[int, TensorType]
 UpdateFuncType = Callable[[TensorType], TensorType]
+IndexsType = Union[TensorType, List[IndScalarType], Tuple[IndScalarType, ...], range]
+OptimazerType = Union[optim.Optimizer, optim.Adam, optim.SGD, optim.RMSprop]
+LossType = Union[nn.Module, nn.CrossEntropyLoss, nn.MSELoss, nn.BCELoss]
 
 
-def spherical_to_cartesian(
-    r: TensorType, theta: TensorType, phi: TensorType, normalize=True
+def locatoin_and_angel_to_line(
+    data: TensorType, speed: bool = True, size: float = 1.0
 ) -> TensorType:
-    """return the cartesian coordinates of the input spherical coordinates
+    """
+    Get the location and angle of items, and return x,y so every couple of numbers is a line. between the lines, there is a nan to space them out.
 
     Args:
-        r (TensorType): tensor (N, ) of r coordinates
-        theta (TensorType): tensor (N, ) of theta coordinates, angle should be in degree (0,180)
-        phi (TensorType): tensor (N, ) of phi coordinates, angle should be in degree (0,360)
-        normalize (bool, optional): if need to normalize the value. Defaults to True.
+        data (TensorType): tensor of shape (m,5) representing x,y, speed, acceleration, angel. even though speed and acceleration are not used in this function.
+        speed (bool, optional): if calculate the speed. Defaults to True.
+        size (float, optional): the size of the lines. Defaults to 1.0.
 
     Returns:
-        TensorType: tensor (N, 3) of cartesian coordinates
-    """ """"""
-    out = torch.column_stack(
+        TensorType: tensor of shape (m,2) representing x,y of the lines. where every couple of numbers is a line and between the lines, there is a nan.
+    """
+    x, y, s, _, angel = data.T
+    if not speed:
+        s = 1
+    new_x = torch.column_stack(
+        [x, size * s * torch.cos(angel) + x, torch.nan * torch.empty_like(x)]
+    ).flatten()
+    new_y = torch.column_stack(
+        [y, size * s * torch.sin(angel) + y, torch.nan * torch.empty_like(y)]
+    ).flatten()
+    return torch.column_stack((new_x, new_y)).T
+
+
+def add_parameters(data: TensorType) -> TensorType:
+    """
+    for each row in the data, add parameters, speed, acceleration, and angle.
+
+    Args:
+        data (TensorType): tensor (N,t,2) where N is several particles, t is time steps and 2 is x,y location in the plane.
+
+    Returns:
+        TensorType: tensor (N,t-2,5) where N is the number of particles, speed, acceleration, angle.
+    """
+    v = (data[2:] - data[:-2]) / 2  # speed by x and y
+    # dx, dy = data[:-1] - data[1:]
+    a = torch.linalg.norm(data[2:] - 2 * data[1:-1] + data[:-2], dim=-1)  # acceleration
+    theta = (
+        ## Calculate the angle of the vector, and convert it to a degree, and remove 90 degrees so front is 0
+        (torch.atan2(v[:, :, 1].reshape(-1), v[:, :, 0].reshape(-1)))
+    ).reshape(v.shape[0], v.shape[1], 1)
+    return torch.cat(
         [
-            r * torch.sin(torch.deg2rad(theta)) * torch.cos(np.deg2rad(phi)),
-            r * torch.sin(torch.deg2rad(theta)) * torch.sin(torch.deg2rad(phi)),
-            r * torch.cos(torch.deg2rad(theta)),
-        ]
+            data[1:-1],
+            torch.linalg.norm(v, dim=-1).unsqueeze(-1),
+            a.unsqueeze(-1),
+            theta,
+        ],
+        dim=-1,
     )
-    if normalize:
-        return out / torch.linalg.norm(out, dim=1)[:, None]
-    return out
 
 
-def cartesian_to_spherical(
-    x: TensorType, y: TensorType, z: TensorType
-) -> Tuple[TensorType, TensorType, TensorType]:
-    """return the spherical coordinates of the input cartesian coordinates
-
-    Args:
-        x (TensorType): tensor (N, ) of x coordinates
-        y (TensorType): tensor (N, ) of y coordinates
-        z (TensorType): tensor (N, ) of z coordinates
-
-    Returns:
-        Tuple[TensorType, TensorType, TensorType]: r, theta, phi of the input cartesian coordinates
-    """
-    r = torch.linalg.norm([x, y, z])
-    theta = torch.rad2deg(torch.arccos(z / r))
-    phi = torch.rad2deg(torch.arctan2(y, x))
-    return r, theta, phi
-
-
-def cone_by_spherical(
-    x: TensorType,
-    y: TensorType,
-    z: TensorType,
-    theta: TensorType,
-    phi: TensorType,
-    r: TensorType = torch.ones(1),
-) -> go.Cone:
-    """return a plotly cone object by the spherical coordinates, which is a tensor of shape (N, 5) with
-    the first three columns as the x, y, z coordinates, and the last two columns as the theta, phi angles.
-    r is the radius of the cone.
-
-    Args:
-        x (TensorType): tensor (N, ) of x coordinates
-        y (TensorType): tensor (N, ) of y coordinates
-        z (TensorType): tensor (N, ) of z coordinates
-        theta (TensorType): tensor (N, ) of theta angles, angle should be in degree (0,180)
-        phi (TensorType): tensor (N, ) of phi angles, angle should be in degree (0,360)
-        r (float, optional): radius of cone. Defaults to 1.
-
-    Returns:
-        go.Cone: _description_
-    """
-    u, v, w = spherical_to_cartesian(r, theta, phi, normalize=False).T
-    return go.Cone(x=x, y=y, z=z, u=u, v=v, w=w, anchor="tail", sizemode="absolute",colorscale=None,)
-
-
-def show_cordinte(
-    data_for_fig: TensorType, box_dim: BoxDimType = (-5, 5), nticks: int = 4
+def plot_timeline_with_direction(
+    data: TensorType,
+    title: str,
+    figsize: BoxDimType = (1200, 1200),
+    steps: Opt[IndexsType] = None,
+    items: Opt[IndexsType] = None,
+    duration: int = 1000,
+    **kwargs,
 ) -> go.Figure:
-    """return a plotly figure of the data, which is a tensor of shape (N, 5) with
-    the first three columns as the x, y, z coordinates, and the last two columns as the theta, phi angles.
+    """
+    plot timeline of data with direction
 
     Args:
-        data_for_fig (Tensor): tensor of shape (N, 5)
-        box_dim (BoxDimType, optional): dim box to show. Defaults to (-5, 5).
-        nticks (int, optional): num of ticks . Defaults to 4.
-
+        data (TensorType): tensor of shape (t,m,5) where t is the number of time steps and m is the number of objects,
+        and the last dim is (x,y, speed, acceleration,angle)
+        title (str): title of the plot
+        figsize (BoxDimType, optional): figure size. Defaults to (10,10).
+        items (Opt[IndexType], optional): indexs for items to plot, if not assigned plot all. Defaults to None.
+        **kwargs: kwargs for go.Layout
     Returns:
-        go.Figur: 3d plotly figure of the data
+        go.Figure: animation figure of timeline
     """
-    return go.Figure(data=cone_by_spherical(*data_for_fig.T)).update_layout(
-        scene=dict(
-            aspectratio=dict(x=1, y=1, z=0.8),
-            camera_eye=dict(x=1.2, y=1.2, z=0.6),
-            xaxis=dict(
-                nticks=nticks,
-                range=box_dim,
+
+    def xy_as_dict(data, **kwargs):
+        x, y = locatoin_and_angel_to_line(data, **kwargs)
+        return dict(x=x, y=y)
+
+    # get axis size
+    max_range = max([data[:, :, 0].max().item(), data[:, :, 1].max().item()])
+    items = range(data.shape[1]) if items is None else items
+    steps = range(data.shape[0]) if steps is None else steps
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                xy_as_dict(data[steps[0], items], size=3),
+                mode="lines",
             ),
-            yaxis=dict(
-                nticks=nticks,
-                range=box_dim,
+            go.Scatter(
+                x=data[steps[0], items, 0], y=data[steps[0], items, 1], mode="markers"
             ),
-            zaxis=dict(
-                nticks=nticks,
-                range=box_dim,
-            ),
+        ],
+        layout=go.Layout(
+            xaxis=dict(range=[0, max_range], constrain="domain"),
+            yaxis=dict(scaleanchor="x", scaleratio=1),
+            title=title,
+            width=figsize[0],
+            height=figsize[1],
+            **kwargs,
         ),
-        coloraxis_showscale=False,
+    ).update_layout(
+        updatemenus=[
+            dict(
+                type="buttons",
+                buttons=[dict(label="Play", method="animate", args=[None])],
+            )
+        ],
     )
 
-
-def slider_time_line(
-    data: TensorType, box_dim: BoxDimType = (-5, 5), nticks: int = 4
-) -> go.Figure:
-    """return a plotly figure of the data, with a slider to change the time
-
-    Args:
-        data (TensorType): data of shape (N, 5) 
-        with the first three columns as the x, y, z coordinates,
-        and the last two columns as the theta, phi angles.
-
-    Returns:
-        go.Figure: figure with slider.
-    """
-    fig = go.Figure(data=cone_by_spherical(*data[0].T))
-    steps = []
-    for i in range(1, len(data)):
-        fig.add_trace(cone_by_spherical(*data[i].T))
-        step = dict(
-            method="update",
-            args=[
-                {"visible": [False] * len(data)},
-                {"title": f"Time: {i}"},
+    frames = [
+        go.Frame(
+            data=[
+                go.Scatter(xy_as_dict(data[t, items], size=3), mode="lines"),
+                go.Scatter(x=data[t, items, 0], y=data[t, items, 1], mode="markers"),
             ],
         )
-        step["args"][0]["visible"][i] = True  # Toggle i'th trace to "visible"
-        steps.append(step)
-
-    sliders = [
-        dict(
-            active=0,
-            currentvalue={"prefix": "Time: "},
-            pad={"t": 50},
-            steps=steps,
-        )
+        for t in steps
     ]
-
-    fig.update_layout(
-        sliders=sliders,
-        scene=dict(
-            aspectratio=dict(x=1, y=1, z=0.8),
-            camera_eye=dict(x=1.2, y=1.2, z=0.6),
-            xaxis=dict(
-                nticks=nticks,
-                range=box_dim,
-            ),
-            yaxis=dict(
-                nticks=nticks,
-                range=box_dim,
-            ),
-            zaxis=dict(
-                nticks=nticks,
-                range=box_dim,
-            ),
-        ),
-        coloraxis_showscale=False,
-    )
+    fig.frames = frames
     return fig
+
+
+def get_index_neighbors(data: TensorType, radius: float) -> TensorType:
+    """get the indexs of the neighbors of each data point
+
+    Args:
+        radius (float): radios of the neighbors
+        data (TensorType): tensor of shape (N,2) of x,y
+
+    Returns:
+        TensorType: tensor of shape (N,N) of the indexs of the neighbors,
+        so data[res[i]] is the neighbors of data[i]
+    """
+    # for each data point, get the distance from any other data point
+    dis_mat = torch.stack(
+        [torch.linalg.norm(data[i, :] - data[:, :], dim=1) for i in range(len(data))]
+    )
+    # for each data point, get the indexs of the data points that are in the radios
+    indexs = torch.stack([dis_mat[i] < radius for i in range(len(data))]) ^ torch.eye(
+        len(data), dtype=torch.bool
+    )
+    return indexs
 
 
 def create_timeline_series(
@@ -185,19 +180,20 @@ def create_timeline_series(
     """create timeline for data,
 
     Args:
-        data (TensorType): input data, tensor (N,d)
+        data (TensorType): input data, tensor (t,N,d)
         f (UpdateFuncType): function to update data, function :(N,d)->(N,d)
         steps (int): num of steps to advance
         *arg: args for f
         **kargs: kargs for f
 
     Returns:
-        TensorType: tensor (steps,N,d), so ret[t] is represent the data int time t
+        TensorType: tensor (t+steps,N,d), so ret[t] is represent the data int time t
     """
     if steps < 0:
         raise ValueError("steps must be grow then 0")
-    res = torch.empty(steps + 1, *data.shape)
-    res[0] = data
-    for t in range(1, steps + 1):
-        res[t] = f(res[t - 1], *arg, **kargs)
+    t, N, d = data.shape
+    res = torch.empty(t + steps, N, d)
+    res[:t] = data.clone()
+    for step in range(t, t + steps):
+        res[step] = f(res[step - 1], *arg, **kargs)
     return res
