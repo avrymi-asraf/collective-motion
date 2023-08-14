@@ -95,10 +95,10 @@ def plot_timeline_with_direction(
 
     Args:
         data (TensorType): tensor of shape (t,m,5) where t is the number of time steps and m is the number of objects,
-        and the last dim is (x,y, speed, acceleration,angle)
+        and the last dim is (x,y, speed, acceleration, angle)
         title (str): title of the plot
         figsize (BoxDimType, optional): figure size. Defaults to (10,10).
-        items (Opt[IndexType], optional): indexs for items to plot, if not assigned plot all. Defaults to None.
+        items (Opt[IndexType], optional): index for items to plot, if not assigned plot all. Defaults to None.
         **kwargs: kwargs for go.Layout
     Returns:
         go.Figure: animation figure of timeline
@@ -153,34 +153,36 @@ def plot_timeline_with_direction(
 
 
 def get_index_neighbors(data: TensorType, radius: float) -> TensorType:
-    """get the indexs of the neighbors of each data point
+    """
+    get the indexes of the neighbors of each data point
 
     Args:
         radius (float): radios of the neighbors
         data (TensorType): tensor of shape (N,2) of x,y
 
     Returns:
-        TensorType: tensor of shape (N,N) of the indexs of the neighbors,
+        TensorType: tensor of shape (N, N) of the indexes of the neighbors,
         so data[res[i]] is the neighbors of data[i]
     """
-    # for each data point, get the distance from any other data point
+    # For each data point, get the distance from any other data point
     dis_mat = torch.stack(
         [torch.linalg.norm(data[i, :] - data[:, :], dim=1) for i in range(len(data))]
     )
-    # for each data point, get the indexs of the data points that are in the radios
-    indexs = torch.stack([dis_mat[i] < radius for i in range(len(data))]) ^ torch.eye(
+    # For each data point, get the indexes of the data points that are in the ratio
+    indexes = torch.stack([dis_mat[i] < radius for i in range(len(data))]) ^ torch.eye(
         len(data), dtype=torch.bool
     )
-    return indexs
+    return indexes
 
 
 def create_timeline_series(
     data: TensorType, f: UpdateFuncType, steps: int, *arg, **kargs
 ) -> TensorType:
-    """create timeline for data,
+    """
+    create a timeline for data,
 
     Args:
-        data (TensorType): input data, tensor (t,N,d)
+        data (TensorType): input data, tensor (t, N,d)
         f (UpdateFuncType): function to update data, function :(N,d)->(N,d)
         steps (int): num of steps to advance
         *arg: args for f
@@ -197,3 +199,21 @@ def create_timeline_series(
     for step in range(t, t + steps):
         res[step] = f(res[step - 1], *arg, **kargs)
     return res
+
+
+def evaluat_in_indexes(
+    data: TensorType, indexes: IndexsType, func: UpdateFuncType, *args, **karags
+) -> TensorType:
+    """
+    evaluate func in indexes points and return the resuls
+
+    Args:
+        data (TensorType): tensor (N,d) of the data
+        indexes (IndexsType): indexes of the points to evaluate, can be range, tuple,list or tensor 1D
+        func (UpdateFuncType): function to evaluate, function :(N,d)->(N,d)
+        *args: args for func
+        **karags: kargs for func
+    Returns:
+        TensorType: tensor (len(indexes),d) of the results
+    """
+    return torch.stack([func(data[i], *args, **karags) for i in indexes])
