@@ -13,15 +13,16 @@ import plotly.figure_factory as ff
 import pandas as pd
 import numpy as np
 
-
-from typing import Tuple, Callable, Union, List, Optional
+from typing import Tuple, Callable, Union, List, Optional, Any
 
 Opt = Optional
-NumType = Union[int, float]
+NumType = Union[int, float,torch.Tensor]
 TensorType = torch.Tensor
 BoxDimType = Tuple[NumType, NumType]
+RangeType = Tuple[NumType, NumType]
+LocType = Tuple[NumType, NumType]
 IndScalarType = Union[int, TensorType]
-UpdateFuncType = Callable[[TensorType], TensorType]
+UpdateFuncType = Callable[[TensorType, dict], TensorType]
 IndexsType = Union[TensorType, List[IndScalarType], Tuple[IndScalarType, ...], range]
 OptimazerType = Union[optim.Optimizer, optim.Adam, optim.SGD, optim.RMSprop]
 LossType = Union[nn.Module, nn.CrossEntropyLoss, nn.MSELoss, nn.BCELoss]
@@ -34,14 +35,14 @@ def locatoin_and_angel_to_line(
     Get the location and angle of items, and return x,y so every couple of numbers is a line. between the lines, there is a nan to space them out.
 
     Args:
-        data (TensorType): tensor of shape (m,5) representing x,y, speed, acceleration, angel. even though speed and acceleration are not used in this function.
+        data (TensorType): tensor of shape (m,4) representing x,y, speed, acceleration, angel. even though speed are not used in this function.
         speed (bool, optional): if calculate the speed. Defaults to True.
         size (float, optional): the size of the lines. Defaults to 1.0.
 
     Returns:
         TensorType: tensor of shape (m,2) representing x,y of the lines. where every couple of numbers is a line and between the lines, there is a nan.
     """
-    x, y, s, _, angel = data.T
+    x, y, s, angel = data.T
     if not speed:
         s = 1
     new_x = torch.column_stack(
@@ -61,11 +62,10 @@ def add_parameters(data: TensorType) -> TensorType:
         data (TensorType): tensor (N,t,2) where N is several particles, t is time steps and 2 is x,y location in the plane.
 
     Returns:
-        TensorType: tensor (N,t-2,5) where N is the number of particles, speed, acceleration, angle.
+        TensorType: tensor (N,t-2,4) where N is the number of particles, speed, angle.
     """
     v = (data[2:] - data[:-2]) / 2  # speed by x and y
     # dx, dy = data[:-1] - data[1:]
-    a = torch.linalg.norm(data[2:] - 2 * data[1:-1] + data[:-2], dim=-1)  # acceleration
     theta = (
         ## Calculate the angle of the vector, and convert it to a degree, and remove 90 degrees so front is 0
         (torch.atan2(v[:, :, 1].reshape(-1), v[:, :, 0].reshape(-1)))
@@ -74,7 +74,6 @@ def add_parameters(data: TensorType) -> TensorType:
         [
             data[1:-1],
             torch.linalg.norm(v, dim=-1).unsqueeze(-1),
-            a.unsqueeze(-1),
             theta,
         ],
         dim=-1,
@@ -94,7 +93,7 @@ def plot_timeline_with_direction(
     plot timeline of data with direction
 
     Args:
-        data (TensorType): tensor of shape (t,m,5) where t is the number of time steps and m is the number of objects,
+        data (TensorType): tensor of shape (t,m,4) where t is the number of time steps and m is the number of objects,
         and the last dim is (x,y, speed, acceleration, angle)
         title (str): title of the plot
         figsize (BoxDimType, optional): figure size. Defaults to (10,10).
@@ -217,3 +216,32 @@ def evaluat_in_indexes(
         TensorType: tensor (len(indexes),d) of the results
     """
     return torch.stack([func(data[i], *args, **karags) for i in indexes])
+
+
+def normelize_data(
+    data: TensorType,
+    loc_range: RangeType = (-5, 5),
+    speed_range: RangeType = (0, 10),
+    max_loc: Opt[NumType] = None,
+    max_speed: Opt[NumType] = None,
+) -> TensorType:
+    """normelize the data, by default the data will be normelized to (-5, 5) and (0, 10)
+
+    Args:
+        data (TensorType): tensor (t,N,4) where t is the time, N is the number of agents and 4 is the x,y,speed,angel.
+        loc_range (RangeType, optional): range of loctoin, It must be square. Defaults to (-5, 5).
+        speed_range (RangeType, optional): range of speed. Defaults to (0, 10).
+        max_loc (Opt[LocType], optional): give max locatoin to normlize by it, if not given take max from data. Defaults to None.
+        max_speed (Opt[int], optional): give max speed to normlize by it,if not given take max from data. Defaults to None.
+    """
+    if max_loc is None:
+        max_loc = data[:, :, :2].abs().max()
+    if max_speed is None:
+        max_speed = data[:, :, :2].max()
+    ret = torch.empty_like(data)
+    ret[:, :, :2] = (data[:, :, :2] / max_loc) * (
+        loc_range[1] - loc_range[0]
+    ) - loc_range[0]
+    ret[:, :, 2] = (data[:, :, 2] / max_speed) * (speed_range[1] - speed_range[0])
+    ret[:, :, 3] = data[:, :, 3]
+    return ret
