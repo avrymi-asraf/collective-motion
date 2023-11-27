@@ -8,6 +8,6 @@
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
-  [המאמר]([https://link-url-here.org](https://docs.google.com/document/d/1xzX5ccnzIw4UxS3XCVyIsuEHP92YNsPk3-0N2xz56sE/edit?usp=sharing)https://docs.google.com/document/d/1xzX5ccnzIw4UxS3XCVyIsuEHP92YNsPk3-0N2xz56sE/edit?usp=sharing)
-המאמר 
+
+  [המאמר](https://docs.google.com/document/d/1xzX5ccnzIw4UxS3XCVyIsuEHP92YNsPk3-0N2xz56sE/edit?usp=sharing)
 
